@@ -1,0 +1,79 @@
+# Hyperparameter Tuning and Model Comparison
+import torch, torch.nn as nn, pandas as pd, matplotlib.pyplot as plt
+from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.tensorboard import SummaryWriter  # ✅ For TensorBoard
+
+# Load MNIST dataset
+df = pd.read_csv('mnist_train.csv').sample(3000, random_state=42)
+X, y = torch.FloatTensor(df.iloc[:, 1:].values / 255), torch.LongTensor(df.iloc[:, 0].values)
+X_train, y_train, X_val, y_val = X[:2500], y[:2500], X[2500:], y[2500:]
+
+# Train function
+def train(lr, bs, layers, hidden, epochs=5, name="Experiment"):
+    model = nn.Sequential(
+        nn.Flatten(),
+        *[layer for i in range(layers)
+          for layer in [nn.Linear(784 if i == 0 else hidden, hidden), nn.ReLU()]],
+        nn.Linear(hidden, 10)
+    )
+    opt, loss_fn = torch.optim.Adam(model.parameters(), lr=lr), nn.CrossEntropyLoss()
+    train_dl = DataLoader(TensorDataset(X_train, y_train), batch_size=bs, shuffle=True)
+    acc_hist = []
+
+    # ✅ Create TensorBoard writer for each experiment
+    writer = SummaryWriter(log_dir=f"runs/{name}")
+
+    for epoch in range(epochs):
+        model.train()
+        [opt.zero_grad() or loss_fn(model(xb), yb).backward() or opt.step() for xb, yb in train_dl]
+        
+        # Validation Accuracy
+        model.eval()
+        with torch.no_grad():
+            acc = (model(X_val).argmax(1) == y_val).float().mean().item()
+        acc_hist.append(acc)
+
+        # ✅ Log accuracy to TensorBoard
+        writer.add_scalar('Validation Accuracy', acc, epoch)
+        writer.add_scalar('Learning Rate', lr, epoch)
+
+    writer.close()  # ✅ Close TensorBoard writer
+    return acc_hist, acc
+
+# Configs: [LR, Batch, Layers, Hidden, Name]
+configs = [
+    (0.001, 32, 2, 128, 'Baseline'),
+    (0.01, 32, 2, 128, 'High_LR'),
+    (0.001, 64, 2, 128, 'Large_Batch'),
+    (0.001, 32, 3, 128, 'Deep'),
+    (0.001, 32, 2, 64, 'Small')
+]
+results = []
+
+print("Hyperparameter Tuning Results\n" + "=" * 50)
+for lr, bs, layers, hidden, name in configs:
+    hist, acc = train(lr, bs, layers, hidden, name=name)
+    results.append((name, lr, bs, layers, hidden, acc, hist))
+    print(f"{name:12} | LR={lr:5}, BS={bs:2}, L={layers}, H={hidden:3} | Acc={acc:.4f}")
+
+# Visualization using Matplotlib
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
+for name, *_, hist in results:
+    ax1.plot(hist, marker='o', label=name)
+ax1.set_xlabel('Epoch'); ax1.set_ylabel('Validation Accuracy')
+ax1.set_title('Accuracy Curves'); ax1.legend(); ax1.grid(True)
+
+names, accs = [r[0] for r in results], [r[5] for r in results]
+ax2.bar(names, accs, color=['blue', 'red', 'green', 'orange', 'purple'])
+ax2.set_ylabel('Final Accuracy'); ax2.set_title('Model Comparison'); ax2.grid(axis='y')
+
+plt.tight_layout(); plt.show()
+
+# Report Summary
+print("\n" + "=" * 50 + "\nCOMPARISON REPORT\n" + "=" * 50)
+print(f"1. Learning Rate: 0.001={results[0][5]:.3f} vs 0.01={results[1][5]:.3f} → Lower LR better")
+print(f"2. Batch Size: 32={results[0][5]:.3f} vs 64={results[2][5]:.3f} → Smaller batch better")
+print(f"3. Depth: 2L={results[0][5]:.3f} vs 3L={results[3][5]:.3f} → Deeper network better")
+print(f"4. Hidden Units: 128={results[0][5]:.3f} vs 64={results[4][5]:.3f} → More neurons better")
+best = max(results, key=lambda x: x[5])
+print(f"\nBest Model: {best[0]} with {best[5]:.4f} accuracy")
